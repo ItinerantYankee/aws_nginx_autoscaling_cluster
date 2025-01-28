@@ -16,7 +16,6 @@ terraform {
 
 # Configure the aws provider
 provider "aws" {
-
   region = "us-east-1"
   profile = "default"
 }
@@ -25,14 +24,12 @@ provider "aws" {
 variable "number_of_subnets" {
   description = "Number of subnets to spread the instances over."
   type = number
-  default = 4
 }
 
 # Set AMI image ID
 variable "ami_image_id" {
   description = "ID of AMI image to use"
   type = string
-  default = "ami-07d4ce6c2eb08b4fc"
 }
 
 # Set instance type of use
@@ -40,6 +37,11 @@ variable "instance_type" {
   description = "EC2 instance type to use"
   type = string
   default = "t2.micro"
+}
+
+variable "domain" {
+  description = "Hosted zone name. E.g. example.com"
+  type = string
 }
 
 # Get AWS account ID
@@ -77,6 +79,39 @@ resource "aws_subnet" "nginx_subnets" {
     Name = "Terraform Nginx-Subnet-${count.index + 1}"
   }
 }
+
+# Create an Internet Gateway and attach it to the VPC created above.
+resource "aws_internet_gateway" "nginx-internet-gateway" {
+  vpc_id = aws_vpc.nginx_vpc.id
+
+  tags = {
+    Name = "Nginx-Internet-Gateway"
+  }
+}
+
+# Create route table attached to the new VPC
+resource "aws_route_table" "nginx_route_table_to_internet_gateway" {
+  vpc_id         = aws_vpc.nginx_vpc.id
+
+  tags = {
+    Name = "Nginx-IG-Route_Table"
+  }
+}
+
+# Create a default route that points to the Internet gateway
+resource "aws_route" "nginx_route_to_IG" {
+  route_table_id = aws_route_table.nginx_route_table_to_internet_gateway.id
+  destination_cidr_block = "0.0.0.0/0"
+  gateway_id = aws_internet_gateway.nginx-internet-gateway.id
+}
+
+# Associate the route created above with each of the subnets created above
+resource "aws_route_table_association" "nginx_route_table_association" {
+  count = length(aws_subnet.nginx_subnets)
+  subnet_id = aws_subnet.nginx_subnets[count.index].id
+  route_table_id = aws_route_table.nginx_route_table_to_internet_gateway.id
+}
+
 
 # Create security group
 resource "aws_security_group" "nginx_security_group" {
@@ -138,6 +173,9 @@ resource "aws_autoscaling_group" "nginx_auto_scaling_group" {
   max_size = 10
   min_size = 3
 
+  target_group_arns = [aws_alb_target_group.nginx_target_group.arn]
+  health_check_type = "ELB"
+  health_check_grace_period = 300
 
   tag {
     key                 = "Service"
@@ -145,6 +183,84 @@ resource "aws_autoscaling_group" "nginx_auto_scaling_group" {
     value               = "Nginx Cluster"
   }
 }
+
+# Create Application Load Balancer
+resource "aws_lb" "nginx_alb" {
+  name = "Nginx-ALB"
+  load_balancer_type = "application"
+  subnets = aws_subnet.nginx_subnets[*].id
+  security_groups = [aws_security_group.nginx_security_group.id]
+
+}
+
+# Create HTTP Listener
+resource "aws_lb_listener" "http" {
+  load_balancer_arn = aws_lb.nginx_alb.arn
+  port = 80
+  protocol = "HTTP"
+
+  # Default action if requests don't match any listener rules
+  default_action {
+    type = "fixed-response"
+
+    fixed_response {
+      content_type = "text/plain"
+      message_body = "404: Page Not Found"
+      status_code = 404
+    }
+  }
+}
+
+# Create HTTPS Listener
+# resource "aws_lb_listener" "https" {
+#   load_balancer_arn = aws_lb.nginx_alb.arn
+#   port = 443
+#   protocol = "HTTPS"
+#
+#   # Default action if requests don't match any listener rules
+#   default_action {
+#     type = "fixed-response"
+#
+#     fixed_response {
+#       content_type = "text/plain"
+#       message_body = "404: Page Not Found"
+#       status_code = 404
+#     }
+#   }
+# }
+
+# Create HTTP Listener Rule
+resource "aws_lb_listener_rule" "nginx_alb_http_rule" {
+  listener_arn = aws_lb_listener.http.arn
+  priority = 100
+
+  action {
+    type = "forward"
+    target_group_arn = aws_alb_target_group.nginx_target_group.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["*"]
+    }
+  }
+}
+
+# Create a target group
+resource "aws_alb_target_group" "nginx_target_group" {
+  name = "Nginx-ASG-Target-Group"
+  port = 80
+  protocol = "HTTP"
+  vpc_id = aws_vpc.nginx_vpc.id
+
+  health_check {
+    path = "/"
+    healthy_threshold = 3
+    unhealthy_threshold = 5
+  }
+}
+
+
 
 # Output availability zones
 output "aws_availability_zones" {
