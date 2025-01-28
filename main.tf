@@ -39,6 +39,11 @@ variable "instance_type" {
   default = "t2.micro"
 }
 
+variable "cluster_name" {
+  description = "Name of cluster to be used in DNS name"
+  type = string
+}
+
 variable "domain" {
   description = "Hosted zone name. E.g. example.com"
   type = string
@@ -46,8 +51,41 @@ variable "domain" {
 
 # Get AWS account ID
 data "aws_caller_identity" "current" {}
-output "account_id" {
-  value = data.aws_caller_identity.current.account_id
+
+# Get hosted zone information. Need Zone ID.
+data "aws_route53_zone" "zone_info" {
+  name = var.domain
+}
+
+# Request ACM Certificate
+resource "aws_acm_certificate" "nginx_certificate" {
+  domain_name = "${var.cluster_name}.${var.domain}"
+  validation_method = "DNS"
+}
+
+# Create the DNS validation record(s) from the challenge returned by ACM in the aws_acm_certificate object
+resource "aws_route53_record" "nginx_cert_validation" {
+  for_each = {
+    # Loop over each if multiple FQDN are attached to the request
+    for dvo in aws_acm_certificate.nginx_certificate.domain_validation_options :
+    dvo.domain_name => {
+      name = dvo.resource_record_name
+      type = dvo.resource_record_type
+      value = dvo.resource_record_value
+    }
+  }
+
+  name    = each.value.name
+  type    = each.value.type
+  records = [each.value.value]
+  zone_id = data.aws_route53_zone.zone_info.zone_id
+  ttl     = 300
+}
+
+# Wait for certificate validation to complete
+resource "aws_acm_certificate_validation" "nginx_cert_validation" {
+  certificate_arn = aws_acm_certificate.nginx_certificate.arn
+  validation_record_fqdns = [for record in aws_route53_record.nginx_cert_validation : record.fqdn]
 }
 
 # Query available availability zones. Store results in 'available_zones'.
@@ -262,9 +300,16 @@ resource "aws_alb_target_group" "nginx_target_group" {
 
 
 
-# Output availability zones
+# Output variables
+output "account_id" {
+  value = data.aws_caller_identity.current.account_id
+}
 output "aws_availability_zones" {
   value = data.aws_availability_zones.available_zones.names
 }
+output "domain" {
+  value = var.domain
+}
+
 
 # Output subnets
