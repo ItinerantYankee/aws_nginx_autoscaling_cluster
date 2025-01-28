@@ -250,26 +250,44 @@ resource "aws_lb_listener" "http" {
 }
 
 # Create HTTPS Listener
-# resource "aws_lb_listener" "https" {
-#   load_balancer_arn = aws_lb.nginx_alb.arn
-#   port = 443
-#   protocol = "HTTPS"
-#
-#   # Default action if requests don't match any listener rules
-#   default_action {
-#     type = "fixed-response"
-#
-#     fixed_response {
-#       content_type = "text/plain"
-#       message_body = "404: Page Not Found"
-#       status_code = 404
-#     }
-#   }
-# }
+resource "aws_lb_listener" "https" {
+  load_balancer_arn = aws_lb.nginx_alb.arn
+  port = 443
+  protocol = "HTTPS"
+  certificate_arn = aws_acm_certificate.nginx_certificate.arn
+
+  # Default action if requests don't match any listener rules
+  default_action {
+    type = "fixed-response"
+
+    fixed_response {
+      content_type = "text/plain"
+      message_body = "404: Page Not Found"
+      status_code = 404
+    }
+  }
+}
 
 # Create HTTP Listener Rule
 resource "aws_lb_listener_rule" "nginx_alb_http_rule" {
   listener_arn = aws_lb_listener.http.arn
+  priority = 100
+
+  action {
+    type = "forward"
+    target_group_arn = aws_alb_target_group.nginx_target_group.arn
+  }
+
+  condition {
+    path_pattern {
+      values = ["*"]
+    }
+  }
+}
+
+# Create HTTPs Listener Rule
+resource "aws_lb_listener_rule" "nginx_alb_https_rule" {
+  listener_arn = aws_lb_listener.https.arn
   priority = 100
 
   action {
