@@ -103,6 +103,62 @@ resource "aws_vpc" "nginx_vpc" {
   }
 }
 
+# Create VPC Flow Logs
+resource "aws_flow_log" "vpc_flow_logs" {
+  iam_role_arn    = aws_iam_role.vpc_flow_log_role.arn
+  log_destination = aws_cloudwatch_log_group.vpc_flow_log_group.arn
+  traffic_type    = "ALL"
+  vpc_id          = aws_vpc.nginx_vpc.id
+}
+
+# Create Clougwatch log group
+resource "aws_cloudwatch_log_group" "vpc_flow_log_group" {
+  name              = "/aws/vpc/flow-logs/${aws_vpc.nginx_vpc.id}"
+  retention_in_days = 30
+}
+
+# Create IAM role that VPC Flow Logs can assume
+resource "aws_iam_role" "vpc_flow_log_role" {
+  name = "vpc-flow-log-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "vpc-flow-logs.amazonaws.com"
+        }
+      }
+    ]
+  })
+}
+
+# Attaches a policy that allows log management to the IAM role created above.
+# Applied to the Cloudwatch log group created above
+resource "aws_iam_role_policy" "vpc_flow_log_policy" {
+  name = "vpc-flow-log-policy"
+  role = aws_iam_role.vpc_flow_log_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents",
+          "logs:DescribeLogGroups",
+          "logs:DescribeLogStreams"
+        ]
+        Effect = "Allow"
+        Resource = "${aws_cloudwatch_log_group.vpc_flow_log_group.arn}:*"
+      }
+    ]
+  })
+}
+
 # Create subnets
 resource "aws_subnet" "nginx_subnets" {
   # The count parameter results in a loop repeated 3 times. Use 'count.index' to access the index of the current loop.
@@ -228,7 +284,6 @@ resource "aws_lb" "nginx_alb" {
   load_balancer_type = "application"
   subnets = aws_subnet.nginx_subnets[*].id
   security_groups = [aws_security_group.nginx_security_group.id]
-
 }
 
 # Create HTTP Listener
@@ -267,7 +322,6 @@ resource "aws_lb_listener" "https" {
     }
   }
 }
-
 
 # Create HTTPS Listener Rule
 resource "aws_lb_listener_rule" "nginx_alb_https_rule" {
@@ -311,6 +365,97 @@ resource "aws_route53_record" "nginx_itinerant_yankee_com" {
     name = aws_lb.nginx_alb.dns_name
     zone_id = aws_lb.nginx_alb.zone_id
   }
+}
+
+# Create WAF Web ACL
+resource "aws_wafv2_web_acl" "nginx_waf_web_acl" {
+  name  = "nginx_waf_web_acl"
+  scope = "REGIONAL"              # Use "CLOUDFRONT" for global distribution
+
+  default_action {
+    allow {}
+  }
+
+  # Common protections
+  rule {
+    name     = "nginx-aws-managed-common"
+    priority = 1
+
+    override_action {
+      none {}
+    }
+
+    statement {
+      managed_rule_group_statement {
+        name        = "AWSManagedRulesCommonRuleSet"
+        vendor_name = "AWS"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name                = "nginx-aws-managed-common"
+      sampled_requests_enabled   = true
+    }
+  }
+
+  # SQL Injection Protection
+  rule {
+    name     = "nginx-aws-managed-sqli"
+    priority = 2
+
+    override_action {
+      none {}
+    }
+
+    statement {
+      managed_rule_group_statement {
+        name        = "AWSManagedRulesSQLiRuleSet"
+        vendor_name = "AWS"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name               = "nginx-aws-managed-sqli"
+      sampled_requests_enabled  = true
+    }
+  }
+
+  # Rate Limiting Rule
+  rule {
+    name     = "nginx-rate-limit"
+    priority = 3
+
+    action {
+      block {}
+    }
+
+    statement {
+      rate_based_statement {
+        limit              = 2000
+        aggregate_key_type = "IP"
+      }
+    }
+
+    visibility_config {
+      cloudwatch_metrics_enabled = true
+      metric_name               = "nginx-rate-limit"
+      sampled_requests_enabled  = true
+    }
+  }
+
+  visibility_config {
+    cloudwatch_metrics_enabled = true
+    metric_name                = "nginx_waf_web_acl"
+    sampled_requests_enabled   = true
+  }
+}
+
+# Associate WAF rules with ALB
+resource "aws_wafv2_web_acl_association" "nginx_alb_waf_association" {
+  resource_arn = aws_lb.nginx_alb.arn
+  web_acl_arn  = aws_wafv2_web_acl.nginx_waf_web_acl.arn
 }
 
 # Output variables
