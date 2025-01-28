@@ -298,7 +298,18 @@ resource "aws_alb_target_group" "nginx_target_group" {
   }
 }
 
+# Create a DNS record for the FQDN that points to the ALB
+resource "aws_route53_record" "nginx_itinerant_yankee_com" {
+  name    = "${var.cluster_name}.${var.domain}"
+  type    = "A"
+  zone_id = data.aws_route53_zone.zone_info.zone_id
 
+  alias {
+    evaluate_target_health = true
+    name = aws_lb.nginx_alb.dns_name
+    zone_id = aws_lb.nginx_alb.zone_id
+  }
+}
 
 # Output variables
 output "account_id" {
