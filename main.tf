@@ -105,25 +105,30 @@ resource "aws_security_group" "nginx_security_group" {
 
 # Create Auto-Scaling Group launch configuration (akin to aws_instance)
 resource "aws_launch_template" "nginx_asg_template" {
+  name = "Nginx-Launch-Template"
   image_id      = var.ami_image_id
   instance_type = var.instance_type
   vpc_security_group_ids = [aws_security_group.nginx_security_group.id]
+
+  tag_specifications {
+    resource_type = "instance"
+
+    tags = {
+      Name = "Nginx Instance"
+    }
+  }
 
   user_data = base64encode(<<-EOF
               echo "Hello, World!" > /var/www/html/index.html
               EOF
               )
 
-  # Required when using a launch configuration with an auto scaling group because ASG references a launch configuration
-  #   by name. If the name is changed Terraform won't have the old name to destroy after createing/replacing the new
-  #   launch configuration. This setting overrides the normal order of destroy, then created
-  lifecycle {
-    create_before_destroy = true
-  }
+
 }
 
 # Create Auto Scaling Group
 resource "aws_autoscaling_group" "nginx_auto_scaling_group" {
+  name = "Nginx-Auto-Scaling-Group"
   launch_template {
     id = aws_launch_template.nginx_asg_template.id
     version = "$Latest"
