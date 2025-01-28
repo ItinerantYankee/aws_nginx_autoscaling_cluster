@@ -254,6 +254,7 @@ resource "aws_lb_listener" "https" {
   port = 443
   protocol = "HTTPS"
   certificate_arn = aws_acm_certificate.nginx_certificate.arn
+  ssl_policy = "ELBSecurityPolicy-TLS13-1-2-2021-06"
 
   # Default action if requests don't match any listener rules
   default_action {
@@ -267,24 +268,8 @@ resource "aws_lb_listener" "https" {
   }
 }
 
-# Create HTTP Listener Rule
-# resource "aws_lb_listener_rule" "nginx_alb_http_rule" {
-#   listener_arn = aws_lb_listener.http.arn
-#   priority = 100
-#
-#   action {
-#     type = "forward"
-#     target_group_arn = aws_alb_target_group.nginx_target_group.arn
-#   }
-#
-#   condition {
-#     path_pattern {
-#       values = ["*"]
-#     }
-#   }
-# }
 
-# Create HTTPs Listener Rule
+# Create HTTPS Listener Rule
 resource "aws_lb_listener_rule" "nginx_alb_https_rule" {
   listener_arn = aws_lb_listener.https.arn
   priority = 100
